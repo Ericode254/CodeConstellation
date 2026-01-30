@@ -2,7 +2,7 @@
 
 Visualizes your project's architecture as an interactive, force-directed graph. See your codebase like a galaxy of interconnected files.
 
-![Code Constellation Banner](https://images.unsplash.com/photo-1506318137071-a8e063b49ec2?auto=format&fit=crop&q=80&w=1200&h=400)
+![Code Constellation Banner](./banner.svg)
 
 ## 🌠 The Concept
 

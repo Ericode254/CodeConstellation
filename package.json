@@ -2,14 +2,14 @@
   "name": "code-constellation",
   "displayName": "Code Constellation",
   "description": "Visualizes your project structure as an interactive force-directed graph, inspired by Obsidian.",
-  "publisher": "your-publisher-id",
+  "publisher": "code-constellation",
   "author": {
-    "name": "Your Name"
+    "name": "Ericode254"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/code-constellation"
+    "url": "https://github.com/Ericode254/CodeConstellation.git"
   },
   "icon": "icon.png",
   "version": "0.0.1",
