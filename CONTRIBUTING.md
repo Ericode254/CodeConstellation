@@ -6,8 +6,8 @@ Thank you for your interest in contributing to Code Constellation! We welcome al
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/yourusername/code-constellation.git
-    cd code-constellation
+    git clone https://github.com/Ericode254/CodeConstellation.git
+    cd CodeConstellation
     ```
 
 2.  **Install dependencies:**
