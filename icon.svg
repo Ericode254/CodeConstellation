@@ -1,0 +1,31 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="bg_grad" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#1e1e1e"/>
+            <stop offset="1" stop-color="#0d1117"/>
+        </linearGradient>
+        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="2" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+    </defs>
+    
+    <!-- Background -->
+    <circle cx="64" cy="64" r="60" fill="url(#bg_grad)" stroke="#30363d" stroke-width="2"/>
+    
+    <!-- Constellation Lines -->
+    <path d="M40 40 L64 30 L88 45 L95 75 L70 100 L45 85" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="2 2" opacity="0.6"/>
+    
+    <!-- Star Nodes -->
+    <circle cx="40" cy="40" r="5" fill="#3178c6" filter="url(#glow)"/> <!-- TS Blue -->
+    <circle cx="64" cy="30" r="4" fill="#f7df1e" filter="url(#glow)"/> <!-- JS Yellow -->
+    <circle cx="88" cy="45" r="6" fill="#58a6ff" filter="url(#glow)"/> <!-- Accent Blue -->
+    <circle cx="95" cy="75" r="4" fill="#e34c26" filter="url(#glow)"/> <!-- HTML Red -->
+    <circle cx="70" cy="100" r="5" fill="#563d7c" filter="url(#glow)"/> <!-- CSS Purple -->
+    <circle cx="45" cy="85" r="3" fill="#cccccc" filter="url(#glow)"/> <!-- Other Grey -->
+    
+    <!-- Central Connection Core -->
+    <circle cx="64" cy="64" r="2" fill="white" opacity="0.8">
+        <animate attributeName="opacity" values="0.8;0.2;0.8" dur="3s" repeatCount="indefinite" />
+    </circle>
+</svg>
