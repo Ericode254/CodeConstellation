@@ -78,7 +78,7 @@ export class GraphPanel {
 
         const rootPath = workspaceFolders[0].uri.fsPath;
         const scanner = new ProjectScanner(rootPath);
-        
+
         vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
             title: "Scanning project...",
@@ -94,11 +94,11 @@ export class GraphPanel {
         if (!workspaceFolders) {
             return;
         }
-        
+
         const rootPath = workspaceFolders[0].uri.fsPath;
         const fullPath = path.join(rootPath, relativePath);
         const uri = vscode.Uri.file(fullPath);
-        
+
         vscode.workspace.openTextDocument(uri).then(doc => {
             vscode.window.showTextDocument(doc);
         });
@@ -118,8 +118,8 @@ export class GraphPanel {
     }
 
     private _getWebviewContent() {
-        const forceGraphPath = vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'force-graph', 'dist', 'force-graph.js');
-        const forceGraphUri = this._panel.webview.asWebviewUri(forceGraphPath);
+        const forceGraph3DPath = vscode.Uri.joinPath(this._extensionUri, 'node_modules', '3d-force-graph', 'dist', '3d-force-graph.min.js');
+        const forceGraph3DUri = this._panel.webview.asWebviewUri(forceGraph3DPath);
 
         const d3Path = vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'd3', 'dist', 'd3.min.js');
         const d3Uri = this._panel.webview.asWebviewUri(d3Path);
@@ -130,7 +130,7 @@ export class GraphPanel {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' ` + cspSource + `;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${cspSource}; img-src ${cspSource} blob: data:; worker-src blob:;">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Code Constellation</title>
     <script>
@@ -147,14 +147,14 @@ export class GraphPanel {
             document.body.appendChild(errDiv);
         };
     </script>
-    <script src="` + d3Uri + `" onerror="console.error('Failed to load d3')"></script>
-    <script src="` + forceGraphUri + `" onerror="console.error('Failed to load force-graph')"></script>
+    <script src="${d3Uri}" onerror="console.error('Failed to load d3')"></script>
+    <script src="${forceGraph3DUri}" onerror="console.error('Failed to load 3d-force-graph')"></script>
     <style>
         :root {
             --vscode-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             --bg-deep: #050508;
             --bg-nebula: #0a0a14;
-            --panel-bg: rgba(20, 20, 25, 0.7);
+            --panel-bg: rgba(20, 20, 25, 0.85);
             --border-color: rgba(255, 255, 255, 0.1);
             --accent-color: #58a6ff;
             --text-color: #a3b3bc;
@@ -167,32 +167,9 @@ export class GraphPanel {
             margin: 0; 
             padding: 0; 
             overflow: hidden; 
-            background: radial-gradient(circle at center, var(--bg-nebula) 0%, var(--bg-deep) 100%);
+            background: #000005;
             color: var(--text-color); 
             font-family: var(--vscode-font-family); 
-        }
-
-        #stars-container {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 0;
-        }
-
-        .star {
-            position: absolute;
-            background: white;
-            border-radius: 50%;
-            opacity: 0.5;
-            animation: twinkle var(--duration) infinite ease-in-out;
-        }
-
-        @keyframes twinkle {
-            0%, 100% { opacity: 0.3; transform: scale(1); }
-            50% { opacity: 1; transform: scale(1.2); }
         }
 
         #graph { 
@@ -274,6 +251,8 @@ export class GraphPanel {
             border: 1px solid var(--border-color);
             font-size: 10px;
             box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            max-height: 300px;
+            overflow-y: auto;
         }
 
         .legend-title {
@@ -313,6 +292,7 @@ export class GraphPanel {
             box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 20px rgba(88, 166, 255, 0.1) !important;
             backdrop-filter: blur(10px);
             color: #ddd;
+            max-width: 350px;
         }
         .tooltip-header {
             font-weight: 700;
@@ -344,6 +324,8 @@ export class GraphPanel {
             white-space: pre-wrap;
             font-family: 'Consolas', 'Monaco', monospace;
             border: 1px solid #30363d;
+            max-height: 150px;
+            overflow-y: auto;
         }
         #stats {
             position: absolute;
@@ -352,20 +334,42 @@ export class GraphPanel {
             z-index: 100;
             font-size: 11px;
             color: #888;
-            background: rgba(0,0,0,0.3);
-            padding: 4px 10px;
+            background: rgba(0,0,0,0.5);
+            padding: 6px 12px;
             border-radius: 10px;
+            border: 1px solid var(--border-color);
+        }
+        
+        #controls-hint {
+            position: absolute;
+            bottom: 60px;
+            left: 20px;
+            z-index: 100;
+            font-size: 10px;
+            color: #666;
+            background: rgba(0,0,0,0.3);
+            padding: 8px 12px;
+            border-radius: 8px;
+            line-height: 1.6;
+        }
+        
+        #controls-hint kbd {
+            background: rgba(255,255,255,0.1);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 9px;
         }
     </style>
 </head>
 <body>
-    <div id="stars-container"></div>
     <div id="toolbar">
         <div class="search-container">
             <input type="text" id="searchInput" placeholder="SCAN SECTOR..." oninput="handleSearch(this.value)">
         </div>
         <button onclick="refresh()">↺ Rescan</button>
         <button onclick="fitToScreen()">▢ Center</button>
+        <button onclick="toggleOrbit()">◎ Orbit</button>
     </div>
 
     <div id="legend">
@@ -389,33 +393,27 @@ export class GraphPanel {
     </div>
 
     <div id="stats">0 files detected • 0 links established</div>
+    <div id="controls-hint">
+        <kbd>Left-click + drag</kbd> Rotate<br>
+        <kbd>Right-click + drag</kbd> Pan<br>
+        <kbd>Scroll</kbd> Zoom<br>
+        <kbd>Click node</kbd> Open file
+    </div>
     <div id="graph"></div>
 
     <script>
-        const starsContainer = document.getElementById('stars-container');
-        for (let i = 0; i < 150; i++) {
-            const star = document.createElement('div');
-            star.className = 'star';
-            const size = Math.random() * 2 + 1;
-            star.style.width = size + 'px';
-            star.style.height = size + 'px';
-            star.style.left = (Math.random() * 100) + '%';
-            star.style.top = (Math.random() * 100) + '%';
-            star.style.setProperty('--duration', (Math.random() * 3 + 2) + 's');
-            star.style.opacity = Math.random();
-            starsContainer.appendChild(star);
-        }
-
         const vscode = acquireVsCodeApi();
-        let Graph;
+        let Graph = null;
         let hoverNode = null;
         let searchNode = null;
         let graphData = { nodes: [], links: [] };
+        let isOrbiting = false;
+        let orbitAngle = 0;
+        let orbitAnimationId = null;
         const neighbors = new Set();
         const neighborLinks = new Set();
         
-        const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
-        
+        // Color palette for file types - vibrant space-themed colors
         const typeColorsMap = {
             '.ts': '#3178c6',
             '.tsx': '#58a6ff',
@@ -426,40 +424,143 @@ export class GraphPanel {
             '.html': '#ffa657',
             '.json': '#7ee787',
             '.py': '#3776ab',
-            '.md': '#ffffff'
+            '.md': '#ffffff',
+            '.go': '#00add8',
+            '.rs': '#dea584',
+            '.java': '#b07219',
+            '.c': '#555555',
+            '.cpp': '#f34b7d',
+            '.h': '#cccccc',
+            '.vue': '#41b883',
+            '.svelte': '#ff3e00',
+            '.php': '#777bb4',
+            '.rb': '#cc342d',
+            '.swift': '#f05138',
+            '.kt': '#a97bff',
+            '.yaml': '#cb171e',
+            '.yml': '#cb171e',
+            '.xml': '#e44d26',
+            '.sql': '#e38c00',
+            '.sh': '#89e051',
+            '.bash': '#89e051'
         };
+        
+        // Fallback colors for unknown types
+        const fallbackColors = [
+            '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7',
+            '#dfe6e9', '#fd79a8', '#a29bfe', '#6c5ce7', '#81ecec'
+        ];
+        let colorIndex = 0;
+        const dynamicColors = {};
 
         function getTypeColor(type) {
-            return typeColorsMap[type] || colorScale(type);
+            if (typeColorsMap[type]) return typeColorsMap[type];
+            if (!dynamicColors[type]) {
+                dynamicColors[type] = fallbackColors[colorIndex % fallbackColors.length];
+                colorIndex++;
+            }
+            return dynamicColors[type];
         }
 
         function initGraph() {
-            if (typeof ForceGraph === 'undefined' || typeof d3 === 'undefined') {
+            if (typeof ForceGraph3D === 'undefined') {
+                console.log('Waiting for ForceGraph3D...');
                 setTimeout(initGraph, 100);
                 return;
             }
 
             try {
-                Graph = ForceGraph()(document.getElementById('graph'));
+                console.log('Initializing 3D Force Graph...');
                 
-                // Optimized forces for an even, expansive "constellation" layout
-                Graph.d3Force('charge').strength(-600).distanceMax(1000); // Stronger repulsion with a range limit
-                Graph.d3Force('link').distance(100);                      // Increased distance between connected stars
-                Graph.d3Force('center').strength(0.01);                  // Very gentle centering to prevent "the ball"
-                Graph.d3Force('collide', d3.forceCollide(function(node) { 
-                    return Math.sqrt(node.size || 1000) / 3 + 15;        // Increased buffer radius to prevent crowding
-                }));
-                
-                Graph.d3VelocityDecay(0.15); // Slightly higher friction for a more stable, even spread
-                Graph.enableNodeDrag(true);
-                Graph.enableZoomPanInteraction(true);
-                Graph.autoPauseRedraw(false);
+                Graph = ForceGraph3D()(document.getElementById('graph'))
+                    .backgroundColor('#000005')
+                    .showNavInfo(false)
+                    .nodeId('id')
+                    .nodeLabel(node => {
+                        const escapeHtml = (unsafe) => { 
+                            if (!unsafe) return '';
+                            return String(unsafe).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); 
+                        };
+                        const preview = node.preview ? escapeHtml(node.preview) : '';
+                        return '<div class="scene-tooltip"><div class="tooltip-header"><span>' + escapeHtml(node.name) + '</span><span style="font-size: 10px; color: #888;">' + (node.size / 1024).toFixed(1) + ' KB</span></div><div class="tooltip-path">' + escapeHtml(node.id) + '</div><pre>' + preview + '</pre></div>';
+                    })
+                    .nodeVal(node => Math.sqrt(node.size || 1000) / 10)
+                    .nodeColor(node => {
+                        if (hoverNode && node !== hoverNode && !neighbors.has(node.id)) {
+                            return 'rgba(100, 100, 100, 0.3)';
+                        }
+                        if (searchNode && node === searchNode) {
+                            return '#ff0055';
+                        }
+                        return getTypeColor(node.type);
+                    })
+                    .nodeOpacity(0.95)
+                    .nodeResolution(16)
+                    .linkWidth(link => {
+                        if (hoverNode && neighborLinks.has(link)) return 2;
+                        return 0.5;
+                    })
+                    .linkColor(link => {
+                        if (hoverNode && neighborLinks.has(link)) return '#ffffff';
+                        if (hoverNode) return 'rgba(255, 255, 255, 0.05)';
+                        return 'rgba(255, 255, 255, 0.2)';
+                    })
+                    .linkOpacity(0.6)
+                    .linkDirectionalParticles(link => {
+                        if (hoverNode && neighborLinks.has(link)) return 4;
+                        return 1;
+                    })
+                    .linkDirectionalParticleWidth(1.5)
+                    .linkDirectionalParticleSpeed(0.005)
+                    .linkDirectionalParticleColor(() => '#58a6ff')
+                    .onNodeClick(node => {
+                        vscode.postMessage({ command: 'openFile', path: node.id });
+                    })
+                    .onNodeHover(node => {
+                        if (node === hoverNode) return;
+                        document.body.style.cursor = node ? 'pointer' : 'default';
+                        hoverNode = node;
+                        neighbors.clear();
+                        neighborLinks.clear();
+                        if (node) {
+                            const links = Graph.graphData().links;
+                            links.forEach(link => {
+                                const sId = typeof link.source === 'object' ? link.source.id : link.source;
+                                const tId = typeof link.target === 'object' ? link.target.id : link.target;
+                                if (sId === node.id) { neighbors.add(tId); neighborLinks.add(link); }
+                                else if (tId === node.id) { neighbors.add(sId); neighborLinks.add(link); }
+                            });
+                        }
+                        // Force re-render to update colors
+                        Graph.nodeColor(Graph.nodeColor());
+                        Graph.linkColor(Graph.linkColor());
+                        Graph.linkWidth(Graph.linkWidth());
+                        Graph.linkDirectionalParticles(Graph.linkDirectionalParticles());
+                    })
+                    .onBackgroundClick(() => {
+                        hoverNode = null;
+                        neighbors.clear();
+                        neighborLinks.clear();
+                        Graph.nodeColor(Graph.nodeColor());
+                        Graph.linkColor(Graph.linkColor());
+                    });
 
-                setupGraphProperties();
+                // Configure the force simulation for a nice spread-out constellation
+                Graph.d3Force('charge').strength(-200);
+                Graph.d3Force('link').distance(80);
+                Graph.d3Force('center').strength(0.05);
+                
+                // Add collision detection
+                Graph.d3Force('collide', d3.forceCollide(node => Math.sqrt(node.size || 1000) / 5 + 5));
+                
+                // Set initial camera position
+                Graph.cameraPosition({ x: 0, y: 0, z: 500 });
+                
+                console.log('3D Force Graph initialized successfully!');
 
             } catch (e) {
                 console.error('Error initializing graph:', e);
-                document.getElementById('graph').innerText = 'Error: ' + e.message;
+                document.getElementById('graph').innerHTML = '<div style="color: red; padding: 20px;">Error initializing 3D graph: ' + e.message + '</div>';
             }
         }
 
@@ -469,176 +570,118 @@ export class GraphPanel {
             container.innerHTML = '';
             
             const types = [];
-            graphData.nodes.forEach(function(n) {
+            graphData.nodes.forEach(n => {
                 const t = n.type || 'other';
                 if (types.indexOf(t) === -1) types.push(t);
             });
             types.sort();
             
-            types.forEach(function(type) {
+            types.forEach(type => {
                 const color = getTypeColor(type);
                 const item = document.createElement('div');
                 item.className = 'legend-item';
                 item.innerHTML = '<div class="dot" style="background: ' + color + '; box-shadow: 0 0 8px ' + color + '"></div>' + type.toUpperCase();
-                item.onclick = function() { highlightType(type); };
+                item.onclick = () => focusOnType(type);
                 container.appendChild(item);
             });
         }
 
-        function highlightType(type) {
-            const node = graphData.nodes.find(function(n) { return n.type === type || (type === 'other' && !n.type); });
-            if (node) {
-                Graph.centerAt(node.x, node.y, 1000);
-                Graph.zoom(3, 1000);
+        function focusOnType(type) {
+            const node = graphData.nodes.find(n => n.type === type || (type === 'other' && !n.type));
+            if (node && node.x !== undefined) {
+                // Animate camera to the node
+                const distance = 150;
+                const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+                Graph.cameraPosition(
+                    { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+                    node,
+                    2000
+                );
                 
+                // Highlight the node
                 hoverNode = node;
                 neighbors.clear();
                 neighborLinks.clear();
                 const links = Graph.graphData().links;
-                links.forEach(function(link) {
+                links.forEach(link => {
                     const sId = typeof link.source === 'object' ? link.source.id : link.source;
                     const tId = typeof link.target === 'object' ? link.target.id : link.target;
                     if (sId === node.id) { neighbors.add(tId); neighborLinks.add(link); }
                     else if (tId === node.id) { neighbors.add(sId); neighborLinks.add(link); }
                 });
+                Graph.nodeColor(Graph.nodeColor());
+                Graph.linkColor(Graph.linkColor());
             }
         }
 
         function handleSearch(query) {
             if (!query) {
                 searchNode = null;
+                Graph.nodeColor(Graph.nodeColor());
                 return;
             }
-            const node = graphData.nodes.find(function(n) { return n.name.toLowerCase().indexOf(query.toLowerCase()) !== -1; });
-            if (node) {
+            const node = graphData.nodes.find(n => n.name.toLowerCase().includes(query.toLowerCase()));
+            if (node && node.x !== undefined) {
                 searchNode = node;
-                Graph.centerAt(node.x, node.y, 800);
-                Graph.zoom(3.5, 800);
+                // Fly to the node
+                const distance = 100;
+                const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+                Graph.cameraPosition(
+                    { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+                    node,
+                    1500
+                );
+                Graph.nodeColor(Graph.nodeColor());
             }
         }
 
         function fitToScreen() {
-            Graph.zoomToFit(1000, 80);
-        }
-
-        function setupGraphProperties() {
             if (!Graph) return;
-
-            const escapeHtml = function(unsafe) { 
-                return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); 
-            };
-
-            Graph
-                .backgroundColor('rgba(5, 5, 8, 0.7)') 
-                .nodeId('id')
-                .nodeLabel(function(node) {
-                    const preview = node.preview ? escapeHtml(node.preview) : '';
-                    return '<div class="scene-tooltip"><div class="tooltip-header"><span>' + node.name + '</span><span style="font-size: 10px; color: #888;">' + (node.size / 1024).toFixed(1) + ' KB</span></div><div class="tooltip-path">' + node.id + '</div><pre>' + preview + '</pre></div>';
-                })
-                .nodeVal(function(node) { return Math.sqrt(node.size || 1000) / 3; })
-                .onNodeClick(function(node) {
-                    vscode.postMessage({ command: 'openFile', path: node.id });
-                })
-                .onNodeHover(function(node) {
-                    if (node === hoverNode) return;
-                    document.body.style.cursor = node ? 'pointer' : null;
-                    hoverNode = node;
-                    neighbors.clear();
-                    neighborLinks.clear();
-                    if (node) {
-                        const links = Graph.graphData().links;
-                        links.forEach(function(link) {
-                            const sId = typeof link.source === 'object' ? link.source.id : link.source;
-                            const tId = typeof link.target === 'object' ? link.target.id : link.target;
-                            if (sId === node.id) { neighbors.add(tId); neighborLinks.add(link); }
-                            else if (tId === node.id) { neighbors.add(sId); neighborLinks.add(link); }
-                        });
-                    }
-                })
-                .linkCanvasObject(function(link, ctx, globalScale) {
-                    const isHovered = hoverNode && neighborLinks.has(link);
-                    const isDimmed = hoverNode && !isHovered;
-                    
-                    ctx.beginPath();
-                    ctx.moveTo(link.source.x, link.source.y);
-                    ctx.lineTo(link.target.x, link.target.y);
-                    
-                    ctx.strokeStyle = isHovered ? '#ffffff' : (isDimmed ? 'rgba(255, 255, 255, 0.02)' : 'rgba(255, 255, 255, 0.15)');
-                    ctx.lineWidth = isHovered ? 2 / globalScale : 0.6 / globalScale;
-                    ctx.stroke();
-
-                    if (isHovered) {
-                        ctx.shadowBlur = 10;
-                        ctx.shadowColor = '#58a6ff';
-                        ctx.stroke();
-                        ctx.shadowBlur = 0;
-                    }
-                })
-                .nodeCanvasObject(function(node, ctx, globalScale) {
-                    // CRITICAL: Ensure coordinates are finite before drawing
-                    if (!isFinite(node.x) || !isFinite(node.y)) return;
-
-                    const isHovered = hoverNode && (node === hoverNode || neighbors.has(node.id));
-                    const isSearching = searchNode && node === searchNode;
-                    const isDimmed = (hoverNode || searchNode) && !isHovered && !isSearching;
-                    
-                    const size = Math.sqrt(node.size || 1000) / 3;
-                    const color = getTypeColor(node.type);
-
-                    const twinkle = (Math.sin(Date.now() / 500 + (node.x || 0)) + 1) / 2;
-
-                    if (!isDimmed) {
-                        const r1 = size * 0.8;
-                        const r2 = size * (1.5 + twinkle * 0.5);
-                        // Ensure radii are valid positive numbers
-                        if (r1 > 0 && r2 > r1) {
-                            const gradient = ctx.createRadialGradient(node.x, node.y, r1, node.x, node.y, r2);
-                            gradient.addColorStop(0, color);
-                            gradient.addColorStop(1, 'rgba(0,0,0,0)');
-                            ctx.fillStyle = gradient;
-                            ctx.beginPath();
-                            ctx.arc(node.x, node.y, size * 3, 0, 2 * Math.PI);
-                            ctx.fill();
-                        }
-                    }
-
-                    ctx.beginPath();
-                    ctx.arc(node.x, node.y, size, 0, 2 * Math.PI, false);
-                    ctx.fillStyle = isDimmed ? 'rgba(255, 255, 255, 0.05)' : color;
-                    ctx.fill();
-                    
-                    if (node === hoverNode || isSearching) {
-                        ctx.beginPath();
-                        ctx.arc(node.x, node.y, size + 3/globalScale, 0, 2 * Math.PI, false);
-                        ctx.strokeStyle = isSearching ? '#ff0055' : '#ffffff';
-                        ctx.lineWidth = 2 / globalScale;
-                        ctx.stroke();
-                        
-                        if (isSearching) {
-                            const pulse = (Math.sin(Date.now() / 200) + 1) / 2;
-                            ctx.beginPath();
-                            ctx.arc(node.x, node.y, size + (10 + pulse * 10) / globalScale, 0, 2 * Math.PI, false);
-                            ctx.strokeStyle = 'rgba(255, 0, 85, ' + (0.3 - pulse * 0.3) + ')';
-                            ctx.stroke();
-                        }
-                    }
-
-                    if (globalScale > 1.2 || isHovered || isSearching) {
-                        const alpha = globalScale > 1.2 ? Math.min(1, (globalScale - 1.2) * 2) : 1;
-                        const fontSize = (isHovered || isSearching ? 15 : 12) / globalScale;
-                        ctx.font = (isHovered || isSearching ? '800' : '500') + ' ' + fontSize + 'px var(--vscode-font-family)';
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-                        ctx.fillStyle = isDimmed ? 'rgba(255, 255, 255, ' + (alpha * 0.05) + ')' : 'rgba(255, 255, 255, ' + (isHovered || isSearching ? 1 : alpha * 0.9) + ')';
-                        ctx.fillText(node.name.toUpperCase(), node.x, node.y + size + fontSize + 4/globalScale);
-                    }
-                })
-                .nodeCanvasObjectMode(function() { return 'replace'; });
+            Graph.zoomToFit(1000, 100);
         }
 
+        function toggleOrbit() {
+            isOrbiting = !isOrbiting;
+            if (isOrbiting) {
+                startOrbit();
+            } else {
+                stopOrbit();
+            }
+        }
+
+        function startOrbit() {
+            if (!Graph) return;
+            
+            function animate() {
+                if (!isOrbiting) return;
+                
+                orbitAngle += 0.002;
+                const distance = 400;
+                const x = distance * Math.sin(orbitAngle);
+                const z = distance * Math.cos(orbitAngle);
+                
+                Graph.cameraPosition({ x: x, y: 100, z: z });
+                orbitAnimationId = requestAnimationFrame(animate);
+            }
+            animate();
+        }
+
+        function stopOrbit() {
+            if (orbitAnimationId) {
+                cancelAnimationFrame(orbitAnimationId);
+                orbitAnimationId = null;
+            }
+        }
+
+        function refresh() {
+            vscode.postMessage({ command: 'refresh' });
+        }
+
+        // Initialize the graph
         initGraph();
 
-        window.addEventListener('message', function(event) {
+        // Handle messages from the extension
+        window.addEventListener('message', event => {
             const message = event.data;
             switch (message.command) {
                 case 'updateData':
@@ -648,11 +691,12 @@ export class GraphPanel {
                     const links = graphData.links;
                     document.getElementById('stats').innerText = nodes.length + ' files detected • ' + links.length + ' links established';
                     
-                    const nodeIds = new Set(nodes.map(function(n) { return n.id; }));
-                    const cleanLinks = links.filter(function(link, index, self) {
+                    // Clean up links to ensure they reference existing nodes
+                    const nodeIds = new Set(nodes.map(n => n.id));
+                    const cleanLinks = links.filter((link, index, self) => {
                         const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
                         const targetId = typeof link.target === 'object' ? link.target.id : link.target;
-                        const firstIdx = self.findIndex(function(l) {
+                        const firstIdx = self.findIndex(l => {
                             return (typeof l.source === 'object' ? l.source.id : l.source) === sourceId && 
                                    (typeof l.target === 'object' ? l.target.id : l.target) === targetId;
                         });
@@ -661,14 +705,14 @@ export class GraphPanel {
 
                     Graph.graphData({ nodes: nodes, links: cleanLinks });
                     renderLegend();
-                    setTimeout(function() { Graph.zoomToFit(800, 50); }, 500);
+                    
+                    // Fit to screen after the simulation settles
+                    setTimeout(() => { 
+                        if (Graph) Graph.zoomToFit(800, 100); 
+                    }, 1500);
                     break;
             }
         });
-
-        function refresh() {
-            vscode.postMessage({ command: 'refresh' });
-        }
     </script>
 </body>
 </html>`;
