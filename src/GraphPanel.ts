@@ -124,6 +124,10 @@ export class GraphPanel {
         const d3Path = vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'd3', 'dist', 'd3.min.js');
         const d3Uri = this._panel.webview.asWebviewUri(d3Path);
 
+        // Load Three.js - using CJS with a shim since a proper UMD bundle is missing in this version
+        const threePath = vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'three', 'build', 'three.cjs');
+        const threeUri = this._panel.webview.asWebviewUri(threePath);
+
         const cspSource = this._panel.webview.cspSource;
 
         return `<!DOCTYPE html>
@@ -146,6 +150,18 @@ export class GraphPanel {
             errDiv.innerText = 'JS Error: ' + message;
             document.body.appendChild(errDiv);
         };
+    </script>
+    <script>
+        // Shim for Three.js CJS bundle
+        window.module = { exports: {} };
+        window.exports = window.module.exports;
+    </script>
+    <script src="${threeUri}" onerror="console.error('Failed to load three')"></script>
+    <script>
+        window.THREE = window.module.exports;
+        // Clean up to avoid breaking other scripts (like D3 or ForceGraph) that check for module
+        delete window.module;
+        delete window.exports;
     </script>
     <script src="${d3Uri}" onerror="console.error('Failed to load d3')"></script>
     <script src="${forceGraph3DUri}" onerror="console.error('Failed to load 3d-force-graph')"></script>
@@ -369,6 +385,8 @@ export class GraphPanel {
         </div>
         <button onclick="refresh()">↺ Rescan</button>
         <button onclick="fitToScreen()">▢ Center</button>
+        <button onclick="zoomIn()">+ Zoom</button>
+        <button onclick="zoomOut()">- Zoom</button>
         <button onclick="toggleOrbit()">◎ Orbit</button>
     </div>
 
@@ -472,6 +490,11 @@ export class GraphPanel {
             try {
                 console.log('Initializing 3D Force Graph...');
                 
+                if (typeof THREE === 'undefined') {
+                    console.error('THREE is not defined even after shim!');
+                    throw new Error('Three.js library failed to load correctly.');
+                }
+                
                 Graph = ForceGraph3D()(document.getElementById('graph'))
                     .backgroundColor('#000005')
                     .showNavInfo(false)
@@ -553,8 +576,76 @@ export class GraphPanel {
                 // Add collision detection
                 Graph.d3Force('collide', d3.forceCollide(node => Math.sqrt(node.size || 1000) / 5 + 5));
                 
+                // Add labels that appear on zoom
+                const ZOOM_THRESHOLD = 800; // Increased threshold
+                
+                Graph.nodeThreeObject(node => {
+                    const group = new THREE.Group();
+                    
+                    // Add the sphere mesh first (default node representation)
+                    const radius = Math.sqrt(node.size || 1000) / 10;
+                    const geometry = new THREE.SphereGeometry(radius, 16, 16);
+                    const material = new THREE.MeshLambertMaterial({ 
+                        color: getTypeColor(node.type),
+                        transparent: true,
+                        opacity: 0.95
+                    });
+                    const sphere = new THREE.Mesh(geometry, material);
+                    group.add(sphere);
+
+                    // Create label sprite
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    const fontSize = 14; // Slightly larger font
+                    context.font = 'bold ' + fontSize + 'px sans-serif'; 
+                    
+                    const textWidth = context.measureText(node.name).width;
+                    canvas.width = textWidth + 20;
+                    canvas.height = fontSize + 20;
+                    
+                    // Re-draw with correct width
+                    context.font = 'bold ' + fontSize + 'px sans-serif';
+                    context.fillStyle = 'white';
+                    context.textAlign = 'center';
+                    context.textBaseline = 'middle';
+                    context.fillText(node.name, canvas.width / 2, canvas.height / 2);
+                    
+                    const texture = new THREE.CanvasTexture(canvas);
+                    const spriteMaterial = new THREE.SpriteMaterial({ map: texture, depthTest: false }); // depthTest false to ensure visibility
+                    const sprite = new THREE.Sprite(spriteMaterial);
+                    
+                    // Position below node
+                    sprite.position.y = -(radius + 4);
+                    const scaleFactor = 0.5;
+                    sprite.scale.set(canvas.width * scaleFactor, canvas.height * scaleFactor, 1);
+                    sprite.name = 'label';
+                    sprite.visible = true; // Show by default to test
+                    
+                    group.add(sprite);
+                    return group;
+                });
+
                 // Set initial camera position
-                Graph.cameraPosition({ x: 0, y: 0, z: 500 });
+                Graph.cameraPosition({ x: 0, y: 0, z: 600 });
+
+                // Monitor zoom levels
+                function updateLabelsVisibility() {
+                    const cameraPos = Graph.cameraPosition();
+                    const distance = Math.hypot(cameraPos.x, cameraPos.y, cameraPos.z);
+                    const showLabels = distance < ZOOM_THRESHOLD;
+                    
+                    Graph.scene().traverse(obj => {
+                        if (obj.name === 'label') {
+                            obj.visible = showLabels;
+                        }
+                    });
+                }
+
+                // Call on zoom/interaction
+                const controls = Graph.controls();
+                if (controls) {
+                    controls.addEventListener('change', updateLabelsVisibility);
+                }
                 
                 console.log('3D Force Graph initialized successfully!');
 
@@ -638,6 +729,28 @@ export class GraphPanel {
         function fitToScreen() {
             if (!Graph) return;
             Graph.zoomToFit(1000, 100);
+        }
+
+        function zoomIn() {
+            if (!Graph) return;
+            const camPos = Graph.cameraPosition();
+            const factor = 0.7; // Zoom in by 30%
+            Graph.cameraPosition({
+                x: camPos.x * factor,
+                y: camPos.y * factor,
+                z: camPos.z * factor
+            }, null, 500);
+        }
+
+        function zoomOut() {
+            if (!Graph) return;
+            const camPos = Graph.cameraPosition();
+            const factor = 1.4; // Zoom out by 40%
+            Graph.cameraPosition({
+                x: camPos.x * factor,
+                y: camPos.y * factor,
+                z: camPos.z * factor
+            }, null, 500);
         }
 
         function toggleOrbit() {
