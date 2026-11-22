@@ -21,6 +21,14 @@ Every large codebase is a complex universe. **Code Constellation** turns your fi
 - **Sleek UI:** A modern, glassmorphism-inspired interface that integrates beautifully with VS Code's dark themes.
 - **Smart Scanning:** Respects your `.gitignore` and common excludes (`node_modules`, `dist`, etc.) to keep the graph relevant.
 - **Rich Previews:** Hover over nodes to see a styled popup with file metadata and the first 10 lines of code.
+- **Auto Refresh:** The graph updates as you create, edit and delete files, without losing your layout.
+
+## ⚙️ Settings
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `codeConstellation.autoRefresh` | `true` | Rescan automatically when files change while the graph is open. |
+| `codeConstellation.animations` | `true` | Twinkle and pulse effects. Turn off to reduce CPU usage. Animations also pause when the graph is not focused or when your OS requests reduced motion. |
 
 ## 🚀 Getting Started
 
@@ -32,10 +40,12 @@ Every large codebase is a complex universe. **Code Constellation** turns your fi
 
 ## 🛠️ Supported Languages
 
-Code Constellation currently parses imports/links for:
-- **Web:** TypeScript (`.ts`, `.tsx`), JavaScript (`.js`, `.jsx`), CSS, SCSS, HTML.
-- **Backend:** Python, Java, Go, Rust, PHP.
-- **Data:** JSON, Markdown.
+Code Constellation draws links from imports in:
+- **TypeScript / JavaScript** (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`): relative `import`, `export … from`, `require()` and `import()`.
+- **CSS / SCSS:** relative `@import` and `url()`.
+- **Python:** `import x` and `from x.y import z` resolved from the project root.
+
+HTML, Java, C/C++, Go, Rust, PHP, JSON and Markdown files appear as stars, but their imports are not linked yet.
 
 ## 🤝 Contributing
 

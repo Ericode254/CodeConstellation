@@ -1,6 +1,10 @@
 import * as vscode from 'vscode';
-import { ProjectScanner } from './ProjectScanner';
+import { ProjectScanner, isScannablePath } from './ProjectScanner';
 import { GraphData } from './types';
+
+const AUTO_REFRESH_DELAY_MS = 1000;
+
+type ScanMode = 'cached' | 'manual' | 'auto';
 
 function createNonce(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -11,13 +15,26 @@ function createNonce(): string {
     return nonce;
 }
 
+function getConfig() {
+    const config = vscode.workspace.getConfiguration('codeConstellation');
+    return {
+        autoRefresh: config.get<boolean>('autoRefresh', true),
+        animations: config.get<boolean>('animations', true)
+    };
+}
+
 export class GraphPanel {
     public static currentPanel: GraphPanel | undefined;
     private readonly _panel: vscode.WebviewPanel;
     private readonly _extensionUri: vscode.Uri;
     private readonly _disposables: vscode.Disposable[] = [];
     private _lastData: GraphData | undefined;
+    private _lastDataJson = '';
     private _disposed = false;
+    private _scanning = false;
+    private _queuedMode: ScanMode | undefined;
+    private _stale = false;
+    private _refreshTimer: NodeJS.Timeout | undefined;
 
     private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
         this._panel = panel;
@@ -28,10 +45,11 @@ export class GraphPanel {
             message => {
                 switch (message.command) {
                     case 'ready':
-                        this._sendData(false);
+                        this._postSettings();
+                        this._sendData(this._stale ? 'auto' : 'cached');
                         return;
                     case 'refresh':
-                        this._sendData(true);
+                        this._sendData('manual');
                         return;
                     case 'openFile':
                         this._openFile(message.path);
@@ -41,6 +59,19 @@ export class GraphPanel {
             null,
             this._disposables
         );
+
+        const watcher = vscode.workspace.createFileSystemWatcher('**/*');
+        const onFileEvent = (uri: vscode.Uri) => this._onFileEvent(uri);
+        watcher.onDidCreate(onFileEvent, null, this._disposables);
+        watcher.onDidChange(onFileEvent, null, this._disposables);
+        watcher.onDidDelete(onFileEvent, null, this._disposables);
+        this._disposables.push(watcher);
+
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('codeConstellation')) {
+                this._postSettings();
+            }
+        }, null, this._disposables);
     }
 
     public static createOrShow(extensionUri: vscode.Uri) {
@@ -57,40 +88,91 @@ export class GraphPanel {
             column || vscode.ViewColumn.One,
             {
                 enableScripts: true,
-                localResourceRoots: [
-                    vscode.Uri.joinPath(extensionUri, 'node_modules', 'force-graph', 'dist'),
-                    vscode.Uri.joinPath(extensionUri, 'node_modules', 'd3', 'dist')
-                ]
+                localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'dist', 'media')]
             }
         );
 
         GraphPanel.currentPanel = new GraphPanel(panel, extensionUri);
     }
 
+    private _onFileEvent(uri: vscode.Uri) {
+        const root = vscode.workspace.workspaceFolders?.[0];
+        if (!root || !getConfig().autoRefresh) {
+            return;
+        }
+        const relativePath = vscode.workspace.asRelativePath(uri, false);
+        if (relativePath === uri.fsPath || !isScannablePath(relativePath)) {
+            return;
+        }
+        if (!this._panel.visible) {
+            // The webview is destroyed while hidden; rescan when it is shown again.
+            this._stale = true;
+            return;
+        }
+        clearTimeout(this._refreshTimer);
+        this._refreshTimer = setTimeout(() => this._sendData('auto'), AUTO_REFRESH_DELAY_MS);
+    }
+
     /**
-     * Posts graph data to the webview. The webview re-sends 'ready' whenever it is
-     * recreated (e.g. after the tab is hidden), so cached data is reused unless a
-     * rescan is requested.
+     * 'cached' reuses the last scan (used when the webview is recreated after being
+     * hidden), 'manual' rescans with a progress notification, and 'auto' rescans
+     * quietly and keeps the current layout.
      */
-    private async _sendData(rescan: boolean) {
+    private async _sendData(mode: ScanMode) {
+        if (this._scanning) {
+            if (mode !== 'cached') {
+                this._queuedMode = this._queuedMode === 'manual' ? 'manual' : mode;
+            }
+            return;
+        }
+
+        const root = vscode.workspace.workspaceFolders?.[0];
+        if (!root) {
+            vscode.window.showErrorMessage('Code Constellation: no workspace folder is open.');
+            return;
+        }
+
+        let changed = true;
+        this._scanning = true;
         try {
-            if (rescan || !this._lastData) {
-                const root = vscode.workspace.workspaceFolders?.[0];
-                if (!root) {
-                    vscode.window.showErrorMessage('Code Constellation: no workspace folder is open.');
-                    return;
-                }
+            if (mode !== 'cached' || !this._lastData) {
                 const scanner = new ProjectScanner(root.uri.fsPath);
-                this._lastData = await vscode.window.withProgress(
-                    { location: vscode.ProgressLocation.Notification, title: 'Scanning project...' },
+                const data = await vscode.window.withProgress(
+                    {
+                        location: mode === 'manual' ? vscode.ProgressLocation.Notification : vscode.ProgressLocation.Window,
+                        title: 'Scanning project...'
+                    },
                     () => scanner.scan()
                 );
+                const json = JSON.stringify(data);
+                changed = json !== this._lastDataJson;
+                this._lastData = data;
+                this._lastDataJson = json;
+                this._stale = false;
             }
-            if (!this._disposed) {
-                this._panel.webview.postMessage({ command: 'updateData', data: this._lastData });
+            if (!this._disposed && (changed || mode !== 'auto')) {
+                this._panel.webview.postMessage({
+                    command: 'updateData',
+                    data: this._lastData,
+                    preserveLayout: mode === 'auto'
+                });
             }
         } catch (error) {
             vscode.window.showErrorMessage(`Code Constellation: failed to scan project (${error}).`);
+        } finally {
+            this._scanning = false;
+        }
+
+        const queued = this._queuedMode;
+        this._queuedMode = undefined;
+        if (queued && !this._disposed) {
+            this._sendData(queued);
+        }
+    }
+
+    private _postSettings() {
+        if (!this._disposed) {
+            this._panel.webview.postMessage({ command: 'settings', animations: getConfig().animations });
         }
     }
 
@@ -108,6 +190,7 @@ export class GraphPanel {
 
     public dispose() {
         this._disposed = true;
+        clearTimeout(this._refreshTimer);
         GraphPanel.currentPanel = undefined;
         this._panel.dispose();
         while (this._disposables.length) {
@@ -117,12 +200,9 @@ export class GraphPanel {
 
     private _getWebviewContent() {
         const webview = this._panel.webview;
-        const forceGraphUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'force-graph', 'dist', 'force-graph.min.js')
-        );
-        const d3Uri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'd3', 'dist', 'd3.min.js')
-        );
+        const mediaUri = vscode.Uri.joinPath(this._extensionUri, 'dist', 'media');
+        const forceGraphUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaUri, 'force-graph.min.js'));
+        const d3Uri = webview.asWebviewUri(vscode.Uri.joinPath(mediaUri, 'd3.min.js'));
         const nonce = createNonce();
 
         return `<!DOCTYPE html>
@@ -187,6 +267,10 @@ export class GraphPanel {
             border-radius: 50%;
             opacity: 0.5;
             animation: twinkle var(--duration) infinite ease-in-out;
+        }
+
+        body.static .star {
+            animation-play-state: paused;
         }
 
         @keyframes twinkle {
@@ -417,7 +501,23 @@ export class GraphPanel {
         let neighbors = EMPTY_SET;
         let neighborLinks = EMPTY_SET;
         let frameTime = 0;
+        let animationsEnabled = true;
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
         const adjacency = new Map();
+
+        function isAnimating() {
+            return animationsEnabled && !reducedMotion.matches && document.hasFocus();
+        }
+
+        // Continuous redraws are only needed for the twinkle/pulse effects; otherwise
+        // force-graph redraws only while the layout moves or the user interacts.
+        function applyAnimationMode() {
+            const animating = isAnimating();
+            document.body.classList.toggle('static', !animating);
+            if (Graph) {
+                Graph.autoPauseRedraw(!animating);
+            }
+        }
 
         const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
 
@@ -484,8 +584,7 @@ export class GraphPanel {
                 Graph.d3Force('center').strength(0.01);
                 Graph.d3Force('collide', d3.forceCollide(function(node) { return node.radius + 15; }));
                 Graph.d3VelocityDecay(0.15);
-                // The twinkle/pulse effects need continuous redraws.
-                Graph.autoPauseRedraw(false);
+                applyAnimationMode();
 
                 setupGraphProperties();
             } catch (e) {
@@ -523,10 +622,10 @@ export class GraphPanel {
             }
         }
 
-        function handleSearch(query) {
+        function handleSearch(query, moveCamera) {
             const q = query.trim().toLowerCase();
             searchNode = q ? (graphData.nodes.find(function(n) { return n.name.toLowerCase().indexOf(q) !== -1; }) || null) : null;
-            if (searchNode) {
+            if (searchNode && moveCamera !== false) {
                 Graph.centerAt(searchNode.x, searchNode.y, 800);
                 Graph.zoom(3.5, 800);
             }
@@ -578,7 +677,7 @@ export class GraphPanel {
                     const color = node.color;
 
                     if (!isDimmed) {
-                        const twinkle = (Math.sin(frameTime / 500 + node.x) + 1) / 2;
+                        const twinkle = isAnimating() ? (Math.sin(frameTime / 500 + node.x) + 1) / 2 : 0.5;
                         const r1 = size * 0.8;
                         const r2 = size * (1.5 + twinkle * 0.5);
                         if (r1 > 0 && r2 > r1) {
@@ -605,7 +704,7 @@ export class GraphPanel {
                         ctx.stroke();
 
                         if (isSearching) {
-                            const pulse = (Math.sin(frameTime / 200) + 1) / 2;
+                            const pulse = isAnimating() ? (Math.sin(frameTime / 200) + 1) / 2 : 0;
                             ctx.beginPath();
                             ctx.arc(node.x, node.y, size + (10 + pulse * 10) / globalScale, 0, 2 * Math.PI, false);
                             ctx.strokeStyle = 'rgba(255, 0, 85, ' + (0.3 - pulse * 0.3) + ')';
@@ -631,24 +730,46 @@ export class GraphPanel {
         document.getElementById('rescanButton').addEventListener('click', function() { vscode.postMessage({ command: 'refresh' }); });
         document.getElementById('centerButton').addEventListener('click', function() { Graph.zoomToFit(1000, 80); });
 
-        window.addEventListener('message', function(event) {
-            const message = event.data;
-            if (message.command !== 'updateData' || !Graph) return;
+        window.addEventListener('focus', applyAnimationMode);
+        window.addEventListener('blur', applyAnimationMode);
+        reducedMotion.addEventListener('change', applyAnimationMode);
 
-            graphData = message.data;
+        function updateData(data, preserveLayout) {
+            const previous = new Map(graphData.nodes.map(function(n) { return [n.id, n]; }));
+            graphData = data;
             graphData.nodes.forEach(function(node) {
                 node.radius = nodeRadius(node);
                 node.color = getTypeColor(node.type);
                 node.label = node.name.toUpperCase();
+                const old = preserveLayout && previous.get(node.id);
+                if (old) {
+                    node.x = old.x;
+                    node.y = old.y;
+                    node.fx = old.fx;
+                    node.fy = old.fy;
+                }
             });
             focusNode(null);
-            searchNode = null;
             buildAdjacency(graphData.links);
 
             document.getElementById('stats').innerText = graphData.nodes.length + ' files detected • ' + graphData.links.length + ' links established';
             Graph.graphData(graphData);
             renderLegend();
-            setTimeout(function() { Graph.zoomToFit(800, 50); }, 500);
+            handleSearch(document.getElementById('searchInput').value, false);
+            if (!preserveLayout) {
+                setTimeout(function() { Graph.zoomToFit(800, 50); }, 500);
+            }
+        }
+
+        window.addEventListener('message', function(event) {
+            const message = event.data;
+            if (!Graph) return;
+            if (message.command === 'settings') {
+                animationsEnabled = message.animations;
+                applyAnimationMode();
+            } else if (message.command === 'updateData') {
+                updateData(message.data, message.preserveLayout);
+            }
         });
 
         initGraph();

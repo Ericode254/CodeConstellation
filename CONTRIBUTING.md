@@ -23,6 +23,14 @@ Thank you for your interest in contributing to Code Constellation! We welcome al
 4.  **Run the extension:**
     - Press `F5` to open a new VS Code window with the extension loaded.
     - Run the command `Code Constellation: Show Project Graph` from the Command Palette (`Ctrl+Shift+P`).
+    - After editing code, run `npm run compile` (or keep `npm run watch` running) and reload the window with `Ctrl+R`.
+
+5.  **Build a `.vsix` package:**
+    ```bash
+    npm run package
+    ```
+
+The extension is bundled with esbuild into `dist/extension.js`. The webview's `force-graph` and `d3` scripts are copied to `dist/media/` during the build.
 
 ## Project Structure
 

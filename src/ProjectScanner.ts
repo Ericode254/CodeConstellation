@@ -42,6 +42,24 @@ function toPosix(p: string): string {
     return p.split(path.sep).join('/');
 }
 
+/**
+ * Whether a change to this workspace-relative path could affect the graph.
+ * Gitignore rules are not checked here; the scan itself applies them.
+ */
+export function isScannablePath(relativePath: string): boolean {
+    const posixPath = toPosix(relativePath);
+    if (posixPath === '.gitignore') {
+        return true;
+    }
+    const segments = posixPath.split('/');
+    if (segments.some(s => s.startsWith('.') || SKIPPED_DIRECTORIES.has(s))) {
+        return false;
+    }
+    // Extensionless paths are usually directories, whose deletion removes files.
+    const ext = path.extname(segments[segments.length - 1]).toLowerCase();
+    return !ext || SUPPORTED_EXTENSIONS.has(ext);
+}
+
 async function readHead(filePath: string, bytes: number): Promise<string> {
     const handle = await fs.promises.open(filePath, 'r');
     try {
