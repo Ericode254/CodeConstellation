@@ -12,7 +12,7 @@
     "url": "https://github.com/Ericode254/CodeConstellation.git"
   },
   "icon": "icon.png",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -20,22 +20,40 @@
     "Visualization"
   ],
   "activationEvents": [],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "code-constellation.showGraph",
         "title": "Code Constellation: Show Project Graph"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Code Constellation",
+      "properties": {
+        "codeConstellation.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Rescan the project automatically when files are created, changed or deleted while the graph is open."
+        },
+        "codeConstellation.animations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable twinkle and pulse animations. Turning this off lets the graph stop redrawing when idle, which lowers CPU usage."
+        }
+      }
+    }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
+    "vscode:prepublish": "npm run check-types && node esbuild.js --production",
+    "compile": "npm run check-types && node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "check-types": "tsc --noEmit -p ./",
+    "compile-tests": "tsc -p ./",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package"
   },
   "devDependencies": {
     "@types/glob": "^7.2.0",
@@ -45,15 +63,14 @@
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "d3": "^7.9.0",
+    "esbuild": "^0.25.10",
     "eslint": "^8.56.0",
+    "force-graph": "^1.43.4",
     "glob": "^7.2.3",
-    "minimatch": "^5.1.0",
+    "ignore": "^7.0.5",
     "mocha": "^11.7.5",
     "typescript": "^5.3.0"
-  },
-  "dependencies": {
-    "d3": "^7.9.0",
-    "force-graph": "^1.43.4",
-    "ignore": "^7.0.5"
   }
 }
