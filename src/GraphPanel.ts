@@ -1,67 +1,65 @@
 import * as vscode from 'vscode';
 import { ProjectScanner } from './ProjectScanner';
 import { GraphData } from './types';
-import * as path from 'path';
-import * as fs from 'fs';
+
+function createNonce(): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let nonce = '';
+    for (let i = 0; i < 32; i++) {
+        nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return nonce;
+}
 
 export class GraphPanel {
     public static currentPanel: GraphPanel | undefined;
     private readonly _panel: vscode.WebviewPanel;
     private readonly _extensionUri: vscode.Uri;
-    private _disposables: vscode.Disposable[] = [];
+    private readonly _disposables: vscode.Disposable[] = [];
+    private _lastData: GraphData | undefined;
+    private _disposed = false;
 
     private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
         this._panel = panel;
         this._extensionUri = extensionUri;
-
-        // Set the webview's initial html content
         this._panel.webview.html = this._getWebviewContent();
-
-        // Listen for when the panel is disposed
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
-
-        // Handle messages from the webview
         this._panel.webview.onDidReceiveMessage(
             message => {
                 switch (message.command) {
-                    case 'openFile':
-                        this._openFile(message.path);
+                    case 'ready':
+                        this._sendData(false);
                         return;
                     case 'refresh':
-                        this._update();
+                        this._sendData(true);
+                        return;
+                    case 'openFile':
+                        this._openFile(message.path);
                         return;
                 }
             },
             null,
             this._disposables
         );
-
-        // Initial update
-        this._update();
     }
 
     public static createOrShow(extensionUri: vscode.Uri) {
-        const column = vscode.window.activeTextEditor
-            ? vscode.window.activeTextEditor.viewColumn
-            : undefined;
+        const column = vscode.window.activeTextEditor?.viewColumn;
 
-        // If we already have a panel, show it.
         if (GraphPanel.currentPanel) {
             GraphPanel.currentPanel._panel.reveal(column);
             return;
         }
 
-        // Otherwise, create a new panel.
         const panel = vscode.window.createWebviewPanel(
             'codeConstellation',
             'Code Constellation',
             column || vscode.ViewColumn.One,
             {
-                // Enable scripts in the webview
                 enableScripts: true,
                 localResourceRoots: [
-                    vscode.Uri.joinPath(extensionUri, 'out'),
-                    vscode.Uri.joinPath(extensionUri, 'node_modules')
+                    vscode.Uri.joinPath(extensionUri, 'node_modules', 'force-graph', 'dist'),
+                    vscode.Uri.joinPath(extensionUri, 'node_modules', 'd3', 'dist')
                 ]
             }
         );
@@ -69,71 +67,72 @@ export class GraphPanel {
         GraphPanel.currentPanel = new GraphPanel(panel, extensionUri);
     }
 
-    private async _update() {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders) {
-            vscode.window.showErrorMessage('No workspace folder open');
-            return;
+    /**
+     * Posts graph data to the webview. The webview re-sends 'ready' whenever it is
+     * recreated (e.g. after the tab is hidden), so cached data is reused unless a
+     * rescan is requested.
+     */
+    private async _sendData(rescan: boolean) {
+        try {
+            if (rescan || !this._lastData) {
+                const root = vscode.workspace.workspaceFolders?.[0];
+                if (!root) {
+                    vscode.window.showErrorMessage('Code Constellation: no workspace folder is open.');
+                    return;
+                }
+                const scanner = new ProjectScanner(root.uri.fsPath);
+                this._lastData = await vscode.window.withProgress(
+                    { location: vscode.ProgressLocation.Notification, title: 'Scanning project...' },
+                    () => scanner.scan()
+                );
+            }
+            if (!this._disposed) {
+                this._panel.webview.postMessage({ command: 'updateData', data: this._lastData });
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage(`Code Constellation: failed to scan project (${error}).`);
         }
-
-        const rootPath = workspaceFolders[0].uri.fsPath;
-        const scanner = new ProjectScanner(rootPath);
-        
-        vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: "Scanning project...",
-            cancellable: false
-        }, async (progress) => {
-            const data = await scanner.scan();
-            this._panel.webview.postMessage({ command: 'updateData', data: data });
-        });
     }
 
-    private _openFile(relativePath: string) {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders) {
+    private async _openFile(relativePath: string) {
+        const root = vscode.workspace.workspaceFolders?.[0];
+        if (!root) {
             return;
         }
-        
-        const rootPath = workspaceFolders[0].uri.fsPath;
-        const fullPath = path.join(rootPath, relativePath);
-        const uri = vscode.Uri.file(fullPath);
-        
-        vscode.workspace.openTextDocument(uri).then(doc => {
-            vscode.window.showTextDocument(doc);
-        });
+        try {
+            await vscode.window.showTextDocument(vscode.Uri.joinPath(root.uri, relativePath));
+        } catch (error) {
+            vscode.window.showErrorMessage(`Code Constellation: could not open ${relativePath}.`);
+        }
     }
 
     public dispose() {
+        this._disposed = true;
         GraphPanel.currentPanel = undefined;
-
         this._panel.dispose();
-
         while (this._disposables.length) {
-            const x = this._disposables.pop();
-            if (x) {
-                x.dispose();
-            }
+            this._disposables.pop()?.dispose();
         }
     }
 
     private _getWebviewContent() {
-        const forceGraphPath = vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'force-graph', 'dist', 'force-graph.js');
-        const forceGraphUri = this._panel.webview.asWebviewUri(forceGraphPath);
-
-        const d3Path = vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'd3', 'dist', 'd3.min.js');
-        const d3Uri = this._panel.webview.asWebviewUri(d3Path);
-
-        const cspSource = this._panel.webview.cspSource;
+        const webview = this._panel.webview;
+        const forceGraphUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'force-graph', 'dist', 'force-graph.min.js')
+        );
+        const d3Uri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'd3', 'dist', 'd3.min.js')
+        );
+        const nonce = createNonce();
 
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' ` + cspSource + `;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-` + nonce + `';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Code Constellation</title>
-    <script>
+    <script nonce="` + nonce + `">
         window.onerror = function(message, source, lineno, colno, error) {
             console.error('Global Error:', message, source, lineno, colno, error);
             const errDiv = document.createElement('div');
@@ -147,8 +146,8 @@ export class GraphPanel {
             document.body.appendChild(errDiv);
         };
     </script>
-    <script src="` + d3Uri + `" onerror="console.error('Failed to load d3')"></script>
-    <script src="` + forceGraphUri + `" onerror="console.error('Failed to load force-graph')"></script>
+    <script nonce="` + nonce + `" src="` + d3Uri + `"></script>
+    <script nonce="` + nonce + `" src="` + forceGraphUri + `"></script>
     <style>
         :root {
             --vscode-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -362,10 +361,10 @@ export class GraphPanel {
     <div id="stars-container"></div>
     <div id="toolbar">
         <div class="search-container">
-            <input type="text" id="searchInput" placeholder="SCAN SECTOR..." oninput="handleSearch(this.value)">
+            <input type="text" id="searchInput" placeholder="SCAN SECTOR...">
         </div>
-        <button onclick="refresh()">↺ Rescan</button>
-        <button onclick="fitToScreen()">▢ Center</button>
+        <button id="rescanButton">↺ Rescan</button>
+        <button id="centerButton">▢ Center</button>
     </div>
 
     <div id="legend">
@@ -391,8 +390,9 @@ export class GraphPanel {
     <div id="stats">0 files detected • 0 links established</div>
     <div id="graph"></div>
 
-    <script>
+    <script nonce="` + nonce + `">
         const starsContainer = document.getElementById('stars-container');
+        const starsFragment = document.createDocumentFragment();
         for (let i = 0; i < 150; i++) {
             const star = document.createElement('div');
             star.className = 'star';
@@ -403,19 +403,24 @@ export class GraphPanel {
             star.style.top = (Math.random() * 100) + '%';
             star.style.setProperty('--duration', (Math.random() * 3 + 2) + 's');
             star.style.opacity = Math.random();
-            starsContainer.appendChild(star);
+            starsFragment.appendChild(star);
         }
+        starsContainer.appendChild(starsFragment);
 
         const vscode = acquireVsCodeApi();
+        const EMPTY_SET = new Set();
+        const fontFamily = getComputedStyle(document.body).fontFamily;
         let Graph;
         let hoverNode = null;
         let searchNode = null;
         let graphData = { nodes: [], links: [] };
-        const neighbors = new Set();
-        const neighborLinks = new Set();
-        
+        let neighbors = EMPTY_SET;
+        let neighborLinks = EMPTY_SET;
+        let frameTime = 0;
+        const adjacency = new Map();
+
         const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
-        
+
         const typeColorsMap = {
             '.ts': '#3178c6',
             '.tsx': '#58a6ff',
@@ -433,30 +438,56 @@ export class GraphPanel {
             return typeColorsMap[type] || colorScale(type);
         }
 
+        function nodeRadius(node) {
+            return Math.sqrt(node.size || 1000) / 3;
+        }
+
+        function escapeHtml(unsafe) {
+            return String(unsafe).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        }
+
+        function buildAdjacency(links) {
+            adjacency.clear();
+            function add(from, to, link) {
+                let entry = adjacency.get(from);
+                if (!entry) {
+                    entry = { neighbors: new Set(), links: new Set() };
+                    adjacency.set(from, entry);
+                }
+                entry.neighbors.add(to);
+                entry.links.add(link);
+            }
+            links.forEach(function(link) {
+                add(link.source, link.target, link);
+                add(link.target, link.source, link);
+            });
+        }
+
+        function focusNode(node) {
+            hoverNode = node;
+            const entry = node && adjacency.get(node.id);
+            neighbors = entry ? entry.neighbors : EMPTY_SET;
+            neighborLinks = entry ? entry.links : EMPTY_SET;
+        }
+
         function initGraph() {
             if (typeof ForceGraph === 'undefined' || typeof d3 === 'undefined') {
-                setTimeout(initGraph, 100);
+                document.getElementById('graph').innerText = 'Error: failed to load graph libraries.';
                 return;
             }
 
             try {
                 Graph = ForceGraph()(document.getElementById('graph'));
-                
-                // Optimized forces for an even, expansive "constellation" layout
-                Graph.d3Force('charge').strength(-600).distanceMax(1000); // Stronger repulsion with a range limit
-                Graph.d3Force('link').distance(100);                      // Increased distance between connected stars
-                Graph.d3Force('center').strength(0.01);                  // Very gentle centering to prevent "the ball"
-                Graph.d3Force('collide', d3.forceCollide(function(node) { 
-                    return Math.sqrt(node.size || 1000) / 3 + 15;        // Increased buffer radius to prevent crowding
-                }));
-                
-                Graph.d3VelocityDecay(0.15); // Slightly higher friction for a more stable, even spread
-                Graph.enableNodeDrag(true);
-                Graph.enableZoomPanInteraction(true);
+
+                Graph.d3Force('charge').strength(-600).distanceMax(1000);
+                Graph.d3Force('link').distance(100);
+                Graph.d3Force('center').strength(0.01);
+                Graph.d3Force('collide', d3.forceCollide(function(node) { return node.radius + 15; }));
+                Graph.d3VelocityDecay(0.15);
+                // The twinkle/pulse effects need continuous redraws.
                 Graph.autoPauseRedraw(false);
 
                 setupGraphProperties();
-
             } catch (e) {
                 console.error('Error initializing graph:', e);
                 document.getElementById('graph').innerText = 'Error: ' + e.message;
@@ -465,22 +496,20 @@ export class GraphPanel {
 
         function renderLegend() {
             const container = document.getElementById('legend-items');
-            if (!container) return;
-            container.innerHTML = '';
-            
-            const types = [];
-            graphData.nodes.forEach(function(n) {
-                const t = n.type || 'other';
-                if (types.indexOf(t) === -1) types.push(t);
-            });
-            types.sort();
-            
+            container.replaceChildren();
+
+            const types = Array.from(new Set(graphData.nodes.map(function(n) { return n.type || 'other'; }))).sort();
             types.forEach(function(type) {
                 const color = getTypeColor(type);
                 const item = document.createElement('div');
                 item.className = 'legend-item';
-                item.innerHTML = '<div class="dot" style="background: ' + color + '; box-shadow: 0 0 8px ' + color + '"></div>' + type.toUpperCase();
-                item.onclick = function() { highlightType(type); };
+                const dot = document.createElement('div');
+                dot.className = 'dot';
+                dot.style.background = color;
+                dot.style.boxShadow = '0 0 8px ' + color;
+                item.appendChild(dot);
+                item.appendChild(document.createTextNode(type.toUpperCase()));
+                item.addEventListener('click', function() { highlightType(type); });
                 container.appendChild(item);
             });
         }
@@ -490,79 +519,44 @@ export class GraphPanel {
             if (node) {
                 Graph.centerAt(node.x, node.y, 1000);
                 Graph.zoom(3, 1000);
-                
-                hoverNode = node;
-                neighbors.clear();
-                neighborLinks.clear();
-                const links = Graph.graphData().links;
-                links.forEach(function(link) {
-                    const sId = typeof link.source === 'object' ? link.source.id : link.source;
-                    const tId = typeof link.target === 'object' ? link.target.id : link.target;
-                    if (sId === node.id) { neighbors.add(tId); neighborLinks.add(link); }
-                    else if (tId === node.id) { neighbors.add(sId); neighborLinks.add(link); }
-                });
+                focusNode(node);
             }
         }
 
         function handleSearch(query) {
-            if (!query) {
-                searchNode = null;
-                return;
-            }
-            const node = graphData.nodes.find(function(n) { return n.name.toLowerCase().indexOf(query.toLowerCase()) !== -1; });
-            if (node) {
-                searchNode = node;
-                Graph.centerAt(node.x, node.y, 800);
+            const q = query.trim().toLowerCase();
+            searchNode = q ? (graphData.nodes.find(function(n) { return n.name.toLowerCase().indexOf(q) !== -1; }) || null) : null;
+            if (searchNode) {
+                Graph.centerAt(searchNode.x, searchNode.y, 800);
                 Graph.zoom(3.5, 800);
             }
         }
 
-        function fitToScreen() {
-            Graph.zoomToFit(1000, 80);
-        }
-
         function setupGraphProperties() {
-            if (!Graph) return;
-
-            const escapeHtml = function(unsafe) { 
-                return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); 
-            };
-
             Graph
-                .backgroundColor('rgba(5, 5, 8, 0.7)') 
+                .backgroundColor('rgba(5, 5, 8, 0.7)')
                 .nodeId('id')
                 .nodeLabel(function(node) {
-                    const preview = node.preview ? escapeHtml(node.preview) : '';
-                    return '<div class="scene-tooltip"><div class="tooltip-header"><span>' + node.name + '</span><span style="font-size: 10px; color: #888;">' + (node.size / 1024).toFixed(1) + ' KB</span></div><div class="tooltip-path">' + node.id + '</div><pre>' + preview + '</pre></div>';
+                    return '<div class="scene-tooltip"><div class="tooltip-header"><span>' + escapeHtml(node.name) + '</span><span style="font-size: 10px; color: #888;">' + (node.size / 1024).toFixed(1) + ' KB</span></div><div class="tooltip-path">' + escapeHtml(node.id) + '</div><pre>' + escapeHtml(node.preview || '') + '</pre></div>';
                 })
-                .nodeVal(function(node) { return Math.sqrt(node.size || 1000) / 3; })
+                .nodeVal(function(node) { return node.radius; })
                 .onNodeClick(function(node) {
                     vscode.postMessage({ command: 'openFile', path: node.id });
                 })
                 .onNodeHover(function(node) {
                     if (node === hoverNode) return;
                     document.body.style.cursor = node ? 'pointer' : null;
-                    hoverNode = node;
-                    neighbors.clear();
-                    neighborLinks.clear();
-                    if (node) {
-                        const links = Graph.graphData().links;
-                        links.forEach(function(link) {
-                            const sId = typeof link.source === 'object' ? link.source.id : link.source;
-                            const tId = typeof link.target === 'object' ? link.target.id : link.target;
-                            if (sId === node.id) { neighbors.add(tId); neighborLinks.add(link); }
-                            else if (tId === node.id) { neighbors.add(sId); neighborLinks.add(link); }
-                        });
-                    }
+                    focusNode(node);
                 })
+                .onRenderFramePre(function() { frameTime = Date.now(); })
                 .linkCanvasObject(function(link, ctx, globalScale) {
                     const isHovered = hoverNode && neighborLinks.has(link);
                     const isDimmed = hoverNode && !isHovered;
-                    
+
                     ctx.beginPath();
                     ctx.moveTo(link.source.x, link.source.y);
                     ctx.lineTo(link.target.x, link.target.y);
-                    
+
                     ctx.strokeStyle = isHovered ? '#ffffff' : (isDimmed ? 'rgba(255, 255, 255, 0.02)' : 'rgba(255, 255, 255, 0.15)');
                     ctx.lineWidth = isHovered ? 2 / globalScale : 0.6 / globalScale;
                     ctx.stroke();
@@ -575,22 +569,18 @@ export class GraphPanel {
                     }
                 })
                 .nodeCanvasObject(function(node, ctx, globalScale) {
-                    // CRITICAL: Ensure coordinates are finite before drawing
                     if (!isFinite(node.x) || !isFinite(node.y)) return;
 
                     const isHovered = hoverNode && (node === hoverNode || neighbors.has(node.id));
                     const isSearching = searchNode && node === searchNode;
                     const isDimmed = (hoverNode || searchNode) && !isHovered && !isSearching;
-                    
-                    const size = Math.sqrt(node.size || 1000) / 3;
-                    const color = getTypeColor(node.type);
-
-                    const twinkle = (Math.sin(Date.now() / 500 + (node.x || 0)) + 1) / 2;
+                    const size = node.radius;
+                    const color = node.color;
 
                     if (!isDimmed) {
+                        const twinkle = (Math.sin(frameTime / 500 + node.x) + 1) / 2;
                         const r1 = size * 0.8;
                         const r2 = size * (1.5 + twinkle * 0.5);
-                        // Ensure radii are valid positive numbers
                         if (r1 > 0 && r2 > r1) {
                             const gradient = ctx.createRadialGradient(node.x, node.y, r1, node.x, node.y, r2);
                             gradient.addColorStop(0, color);
@@ -606,16 +596,16 @@ export class GraphPanel {
                     ctx.arc(node.x, node.y, size, 0, 2 * Math.PI, false);
                     ctx.fillStyle = isDimmed ? 'rgba(255, 255, 255, 0.05)' : color;
                     ctx.fill();
-                    
+
                     if (node === hoverNode || isSearching) {
                         ctx.beginPath();
-                        ctx.arc(node.x, node.y, size + 3/globalScale, 0, 2 * Math.PI, false);
+                        ctx.arc(node.x, node.y, size + 3 / globalScale, 0, 2 * Math.PI, false);
                         ctx.strokeStyle = isSearching ? '#ff0055' : '#ffffff';
                         ctx.lineWidth = 2 / globalScale;
                         ctx.stroke();
-                        
+
                         if (isSearching) {
-                            const pulse = (Math.sin(Date.now() / 200) + 1) / 2;
+                            const pulse = (Math.sin(frameTime / 200) + 1) / 2;
                             ctx.beginPath();
                             ctx.arc(node.x, node.y, size + (10 + pulse * 10) / globalScale, 0, 2 * Math.PI, false);
                             ctx.strokeStyle = 'rgba(255, 0, 85, ' + (0.3 - pulse * 0.3) + ')';
@@ -624,51 +614,45 @@ export class GraphPanel {
                     }
 
                     if (globalScale > 1.2 || isHovered || isSearching) {
+                        const emphasized = isHovered || isSearching;
                         const alpha = globalScale > 1.2 ? Math.min(1, (globalScale - 1.2) * 2) : 1;
-                        const fontSize = (isHovered || isSearching ? 15 : 12) / globalScale;
-                        ctx.font = (isHovered || isSearching ? '800' : '500') + ' ' + fontSize + 'px var(--vscode-font-family)';
+                        const fontSize = (emphasized ? 15 : 12) / globalScale;
+                        ctx.font = (emphasized ? '800 ' : '500 ') + fontSize + 'px ' + fontFamily;
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
-                        ctx.fillStyle = isDimmed ? 'rgba(255, 255, 255, ' + (alpha * 0.05) + ')' : 'rgba(255, 255, 255, ' + (isHovered || isSearching ? 1 : alpha * 0.9) + ')';
-                        ctx.fillText(node.name.toUpperCase(), node.x, node.y + size + fontSize + 4/globalScale);
+                        ctx.fillStyle = isDimmed ? 'rgba(255, 255, 255, ' + (alpha * 0.05) + ')' : 'rgba(255, 255, 255, ' + (emphasized ? 1 : alpha * 0.9) + ')';
+                        ctx.fillText(node.label, node.x, node.y + size + fontSize + 4 / globalScale);
                     }
                 })
                 .nodeCanvasObjectMode(function() { return 'replace'; });
         }
 
-        initGraph();
+        document.getElementById('searchInput').addEventListener('input', function(e) { handleSearch(e.target.value); });
+        document.getElementById('rescanButton').addEventListener('click', function() { vscode.postMessage({ command: 'refresh' }); });
+        document.getElementById('centerButton').addEventListener('click', function() { Graph.zoomToFit(1000, 80); });
 
         window.addEventListener('message', function(event) {
             const message = event.data;
-            switch (message.command) {
-                case 'updateData':
-                    if (!Graph) return;
-                    graphData = message.data;
-                    const nodes = graphData.nodes;
-                    const links = graphData.links;
-                    document.getElementById('stats').innerText = nodes.length + ' files detected • ' + links.length + ' links established';
-                    
-                    const nodeIds = new Set(nodes.map(function(n) { return n.id; }));
-                    const cleanLinks = links.filter(function(link, index, self) {
-                        const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
-                        const targetId = typeof link.target === 'object' ? link.target.id : link.target;
-                        const firstIdx = self.findIndex(function(l) {
-                            return (typeof l.source === 'object' ? l.source.id : l.source) === sourceId && 
-                                   (typeof l.target === 'object' ? l.target.id : l.target) === targetId;
-                        });
-                        return index === firstIdx && nodeIds.has(sourceId) && nodeIds.has(targetId);
-                    });
+            if (message.command !== 'updateData' || !Graph) return;
 
-                    Graph.graphData({ nodes: nodes, links: cleanLinks });
-                    renderLegend();
-                    setTimeout(function() { Graph.zoomToFit(800, 50); }, 500);
-                    break;
-            }
+            graphData = message.data;
+            graphData.nodes.forEach(function(node) {
+                node.radius = nodeRadius(node);
+                node.color = getTypeColor(node.type);
+                node.label = node.name.toUpperCase();
+            });
+            focusNode(null);
+            searchNode = null;
+            buildAdjacency(graphData.links);
+
+            document.getElementById('stats').innerText = graphData.nodes.length + ' files detected • ' + graphData.links.length + ' links established';
+            Graph.graphData(graphData);
+            renderLegend();
+            setTimeout(function() { Graph.zoomToFit(800, 50); }, 500);
         });
 
-        function refresh() {
-            vscode.postMessage({ command: 'refresh' });
-        }
+        initGraph();
+        vscode.postMessage({ command: 'ready' });
     </script>
 </body>
 </html>`;
